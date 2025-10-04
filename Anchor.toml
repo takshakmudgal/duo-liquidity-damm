@@ -4,6 +4,7 @@ skip-lint = false
 
 [programs.localnet]
 cp_amm = "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG"
+lending_pool = "9o42VBepS4qZHsPcCY8rn9G9YFqs3RtZB7TEK4DWAu8Y"
 
 [registry]
 url = "https://api.apr.dev"

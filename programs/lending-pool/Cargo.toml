@@ -1,0 +1,24 @@
+[package]
+name = "lending-pool"
+version = "0.1.0"
+description = "DuoLiquidity Lending Pool for Shorting"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "lending_pool"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
+bytemuck = { workspace = true }
+cp-amm = { path = "../cp-amm", features = ["cpi"] }
+
