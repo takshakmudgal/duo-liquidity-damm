@@ -6,31 +6,40 @@ import {
   PublicKey,
   SystemProgram,
   LAMPORTS_PER_SOL,
+  Connection,
 } from "@solana/web3.js";
 import { assert } from "chai";
 
-describe("lending-pool simulations", () => {
-  anchor.setProvider(anchor.AnchorProvider.env());
+describe("lending-pool simulations", async () => {
+  const connection = new Connection("devnet", "confirmed");
   const program = anchor.workspace.LendingPool as Program<LendingPool>;
+  const sender = Keypair.generate();
+  const airdropSignature = await connection.requestAirdrop(
+    sender.publicKey,
+    LAMPORTS_PER_SOL
+  );
 
-  it("simulates Excel scenario: initial pool setup", async () => {
-    const initialLiquidityA = new BN("20000");
-    const initialLiquidityB = new BN("80000");
-    const sqrtPrice = new BN("23434");
+  await connection.confirmTransaction(airdropSignature, "confirmed");
+  console.log(airdropSignature, "airdrop confirmed");
 
-    const tx = await program.methods.initializeLendingPool(
-      initialLiquidityA.toNumber(),
-      initialLiquidityB.toNumber(),
-      sqrtPrice.toNumber()
-    );
+  // it("simulates Excel scenario: initial pool setup", async () => {
+  //   const initialLiquidityA = new BN("20000");
+  //   const initialLiquidityB = new BN("80000");
+  //   const sqrtPrice = new BN("23434");
 
-    console.log("Initial State:");
-    console.log("Token A Amount:", initialLiquidityA.toString());
-    console.log("Token B Amount:", initialLiquidityB.toString());
-    console.log(
-      "Price (Token B per Token A):",
-      initialLiquidityB.toNumber() / initialLiquidityA.toNumber()
-    );
-    console.log(tx);
-  });
+  //   const tx = program.methods.initializeLendingPool(
+  //     initialLiquidityA.toNumber(),
+  //     initialLiquidityB.toNumber(),
+  //     sqrtPrice.toNumber()
+  //   );
+
+  //   console.log("Initial State:");
+  //   console.log("Token A Amount:", initialLiquidityA.toString());
+  //   console.log("Token B Amount:", initialLiquidityB.toString());
+  //   console.log(
+  //     "Price (Token B per Token A):",
+  //     initialLiquidityB.toNumber() / initialLiquidityA.toNumber()
+  //   );
+  //   console.log(tx);
+  // });
 });
