@@ -52,7 +52,7 @@ pub fn handle_initialize_lending_pool(
         crate::state::ErrorCode::InsufficientCollateral
     );
     require!(
-        liquidation_threshold >= 10000 && liquidation_threshold < min_collateral_ratio,
+        liquidation_threshold < min_collateral_ratio,
         crate::state::ErrorCode::InsufficientCollateral
     );
     require!(
@@ -77,4 +77,3 @@ pub fn handle_initialize_lending_pool(
 
     Ok(())
 }
-

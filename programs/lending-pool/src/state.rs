@@ -22,7 +22,8 @@ pub struct LendingPool {
 }
 
 impl LendingPool {
-    pub const LEN: usize = 8 + 32 + 32 + 32 + 32 + 32 + 8 + 8 + 8 + 2 + 2 + 2 + 2 + 8 + 1 + 7 + (8 * 16);
+    pub const LEN: usize =
+        8 + 32 + 32 + 32 + 32 + 32 + 8 + 8 + 8 + 2 + 2 + 2 + 2 + 8 + 1 + 7 + (8 * 16);
 
     pub fn initialize(
         &mut self,
@@ -52,37 +53,49 @@ impl LendingPool {
     }
 
     pub fn add_reserves(&mut self, amount: u64) -> Result<()> {
-        self.total_reserves = self.total_reserves.checked_add(amount)
+        self.total_reserves = self
+            .total_reserves
+            .checked_add(amount)
             .ok_or(error!(ErrorCode::MathOverflow))?;
         Ok(())
     }
 
     pub fn remove_reserves(&mut self, amount: u64) -> Result<()> {
-        self.total_reserves = self.total_reserves.checked_sub(amount)
+        self.total_reserves = self
+            .total_reserves
+            .checked_sub(amount)
             .ok_or(error!(ErrorCode::InsufficientReserves))?;
         Ok(())
     }
 
     pub fn add_borrowed(&mut self, amount: u64) -> Result<()> {
-        self.total_borrowed = self.total_borrowed.checked_add(amount)
+        self.total_borrowed = self
+            .total_borrowed
+            .checked_add(amount)
             .ok_or(error!(ErrorCode::MathOverflow))?;
         Ok(())
     }
 
     pub fn remove_borrowed(&mut self, amount: u64) -> Result<()> {
-        self.total_borrowed = self.total_borrowed.checked_sub(amount)
+        self.total_borrowed = self
+            .total_borrowed
+            .checked_sub(amount)
             .ok_or(error!(ErrorCode::MathOverflow))?;
         Ok(())
     }
 
     pub fn increment_positions(&mut self) -> Result<()> {
-        self.active_positions = self.active_positions.checked_add(1)
+        self.active_positions = self
+            .active_positions
+            .checked_add(1)
             .ok_or(error!(ErrorCode::MathOverflow))?;
         Ok(())
     }
 
     pub fn decrement_positions(&mut self) -> Result<()> {
-        self.active_positions = self.active_positions.checked_sub(1)
+        self.active_positions = self
+            .active_positions
+            .checked_sub(1)
             .ok_or(error!(ErrorCode::MathOverflow))?;
         Ok(())
     }
@@ -129,7 +142,9 @@ impl ShortPosition {
     }
 
     pub fn get_collateral_ratio(&self, current_sqrt_price: u128) -> Result<u128> {
-        let total_collateral = self.collateral_amount.checked_add(self.sol_from_swap)
+        let total_collateral = self
+            .collateral_amount
+            .checked_add(self.sol_from_swap)
             .ok_or(error!(ErrorCode::MathOverflow))?;
 
         let price_ratio = (current_sqrt_price as u128)
@@ -158,15 +173,19 @@ impl ShortPosition {
     }
 
     pub fn calculate_pnl(&self, buyback_cost: u64) -> Result<(u64, bool)> {
-        let total_collateral = self.collateral_amount.checked_add(self.sol_from_swap)
+        let total_collateral = self
+            .collateral_amount
+            .checked_add(self.sol_from_swap)
             .ok_or(error!(ErrorCode::MathOverflow))?;
 
         if buyback_cost > total_collateral {
-            let loss = buyback_cost.checked_sub(total_collateral)
+            let loss = buyback_cost
+                .checked_sub(total_collateral)
                 .ok_or(error!(ErrorCode::MathOverflow))?;
             Ok((loss, false))
         } else {
-            let profit = total_collateral.checked_sub(buyback_cost)
+            let profit = total_collateral
+                .checked_sub(buyback_cost)
                 .ok_or(error!(ErrorCode::MathOverflow))?;
             Ok((profit, true))
         }
@@ -194,4 +213,3 @@ pub enum ErrorCode {
     #[msg("Position healthy, cannot liquidate")]
     PositionHealthy,
 }
-

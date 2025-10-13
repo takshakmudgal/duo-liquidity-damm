@@ -1,45 +1,53 @@
 import * as anchor from "@coral-xyz/anchor";
-import { Program, BN } from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
 import { LendingPool } from "../target/types/lending_pool";
-import {
-  Keypair,
-  PublicKey,
-  SystemProgram,
-  LAMPORTS_PER_SOL,
-  Connection,
-} from "@solana/web3.js";
-import { assert } from "chai";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { createMint } from "@solana/spl-token";
 
-describe("lending-pool simulations", async () => {
-  const connection = new Connection("devnet", "confirmed");
+describe("lending-pool", () => {
+  const provider = anchor.AnchorProvider.env();
+  const connection = provider.connection;
+  const wallet = provider.wallet as anchor.Wallet;
+  anchor.setProvider(provider);
   const program = anchor.workspace.LendingPool as Program<LendingPool>;
-  const sender = Keypair.generate();
-  const airdropSignature = await connection.requestAirdrop(
-    sender.publicKey,
-    LAMPORTS_PER_SOL
-  );
 
-  await connection.confirmTransaction(airdropSignature, "confirmed");
-  console.log(airdropSignature, "airdrop confirmed");
+  let tokenAMint: PublicKey;
+  let tokenBMint: PublicKey;
+  let ammPool: Keypair;
 
-  // it("simulates Excel scenario: initial pool setup", async () => {
-  //   const initialLiquidityA = new BN("20000");
-  //   const initialLiquidityB = new BN("80000");
-  //   const sqrtPrice = new BN("23434");
+  before(async () => {
+    tokenAMint = await createMint(
+      connection,
+      wallet.payer,
+      wallet.publicKey,
+      null,
+      9
+    );
+    tokenBMint = await createMint(
+      connection,
+      wallet.payer,
+      wallet.publicKey,
+      null,
+      9
+    );
+    ammPool = Keypair.generate();
+  });
 
-  //   const tx = program.methods.initializeLendingPool(
-  //     initialLiquidityA.toNumber(),
-  //     initialLiquidityB.toNumber(),
-  //     sqrtPrice.toNumber()
-  //   );
+  it("init lending pool", async () => {
+    // const [lendingPoolPda] = PublicKey.findProgramAddressSync(
+    //   [Buffer.from("lending_pool"), ammPool.publicKey.toBuffer()],
+    //   program.programId
+    // );
 
-  //   console.log("Initial State:");
-  //   console.log("Token A Amount:", initialLiquidityA.toString());
-  //   console.log("Token B Amount:", initialLiquidityB.toString());
-  //   console.log(
-  //     "Price (Token B per Token A):",
-  //     initialLiquidityB.toNumber() / initialLiquidityA.toNumber()
-  //   );
-  //   console.log(tx);
-  // });
+    // const [tokenBVaultPda] = PublicKey.findProgramAddressSync(
+    //   [Buffer.from("token_b_vault"), lendingPoolPda.toBuffer()],
+    //   program.programId
+    // );
+
+    const tx = await program.methods
+      .initializeLendingPool(15000, 12000, 100)
+      .rpc({ skipPreflight: true });
+
+    console.log(tx);
+  });
 });
