@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 #[account(zero_copy)]
-#[derive(Default)]
+#[derive(InitSpace)]
 pub struct LendingPool {
     pub authority: Pubkey,
     pub amm_pool: Pubkey,
@@ -21,9 +21,23 @@ pub struct LendingPool {
     pub _reserved: [u64; 16],
 }
 
+#[account]
+#[derive(InitSpace)]
+pub struct ShortPosition {
+    pub lending_pool: Pubkey,
+    pub owner: Pubkey,
+    pub collateral_amount: u64,
+    pub borrowed_amount: u64,
+    pub sol_from_swap: u64,
+    pub entry_sqrt_price: u128,
+    pub opened_at: i64,
+    pub bump: u8,
+    pub status: u8,
+    pub _padding: [u8; 6],
+}
+
 impl LendingPool {
-    pub const LEN: usize =
-        8 + 32 + 32 + 32 + 32 + 32 + 8 + 8 + 8 + 2 + 2 + 2 + 2 + 8 + 1 + 7 + (8 * 16);
+    pub const LEN: usize = 8 + LendingPool::INIT_SPACE;
 
     pub fn initialize(
         &mut self,
@@ -101,23 +115,8 @@ impl LendingPool {
     }
 }
 
-#[account]
-#[derive(Default)]
-pub struct ShortPosition {
-    pub lending_pool: Pubkey,
-    pub owner: Pubkey,
-    pub collateral_amount: u64,
-    pub borrowed_amount: u64,
-    pub sol_from_swap: u64,
-    pub entry_sqrt_price: u128,
-    pub opened_at: i64,
-    pub bump: u8,
-    pub status: u8,
-    pub _padding: [u8; 6],
-}
-
 impl ShortPosition {
-    pub const LEN: usize = 8 + 32 + 32 + 8 + 8 + 8 + 16 + 8 + 1 + 1 + 6;
+    pub const LEN: usize = 8 + ShortPosition::INIT_SPACE;
 
     pub fn initialize(
         &mut self,
@@ -137,7 +136,7 @@ impl ShortPosition {
         self.entry_sqrt_price = entry_sqrt_price;
         self.opened_at = Clock::get()?.unix_timestamp;
         self.bump = bump;
-        self.status = 0; // Active
+        self.status = 0; // active
         Ok(())
     }
 
