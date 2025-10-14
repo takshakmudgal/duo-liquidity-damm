@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 #[account(zero_copy)]
-#[derive(Default)]
+#[derive(Default, InitSpace)]
 pub struct LendingPool {
     pub authority: Pubkey,
     pub amm_pool: Pubkey,
@@ -22,8 +22,7 @@ pub struct LendingPool {
 }
 
 impl LendingPool {
-    pub const LEN: usize =
-        8 + 32 + 32 + 32 + 32 + 32 + 8 + 8 + 8 + 2 + 2 + 2 + 2 + 8 + 1 + 7 + (8 * 16);
+    pub const LEN: usize = 8 + LendingPool::INIT_SPACE;
 
     pub fn initialize(
         &mut self,
