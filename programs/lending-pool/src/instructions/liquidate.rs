@@ -6,7 +6,6 @@ use crate::state::{ErrorCode, LendingPool, ShortPosition};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct LiquidateParams {
-    /// Maximum SOL to spend for buyback
     pub max_sol_in: u64,
 }
 
@@ -35,21 +34,15 @@ pub struct Liquidate<'info> {
     /// CHECK: pool authority PDA
     pub pool_authority: UncheckedAccount<'info>,
 
-    /// Token A mint
     pub token_a_mint: Account<'info, Mint>,
-
-    /// Token B mint
     pub token_b_mint: Account<'info, Mint>,
 
-    /// AMM's Token A vault
     #[account(mut)]
     pub amm_token_a_vault: Account<'info, TokenAccount>,
 
-    /// AMM's Token B vault
     #[account(mut)]
     pub amm_token_b_vault: Account<'info, TokenAccount>,
 
-    /// Lending pool's Token B vault
     #[account(
         mut,
         seeds = [b"token_b_vault", lending_pool.key().as_ref()],
@@ -57,7 +50,6 @@ pub struct Liquidate<'info> {
     )]
     pub lending_pool_vault: Account<'info, TokenAccount>,
 
-    /// Temporary Token A account
     #[account(
         mut,
         seeds = [b"temp_token_a", short_position.key().as_ref()],
@@ -65,14 +57,11 @@ pub struct Liquidate<'info> {
     )]
     pub temp_token_a_account: Account<'info, TokenAccount>,
 
-    /// Liquidator's reward account (receives liquidation bonus)
     #[account(mut)]
     pub liquidator_reward_account: Account<'info, TokenAccount>,
 
-    /// Liquidator executing the liquidation
     pub liquidator: Signer<'info>,
 
-    /// Payer for closing accounts
     #[account(mut)]
     pub payer: Signer<'info>,
 
@@ -90,15 +79,16 @@ pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Res
 
     let lending_pool = ctx.accounts.lending_pool.load()?;
 
-    // Get current price from AMM pool
     let amm_pool_data = ctx.accounts.amm_pool.try_borrow_data()?;
     let amm_pool_state = bytemuck::try_from_bytes::<cp_amm::state::Pool>(&amm_pool_data[8..])
         .map_err(|_| ErrorCode::MathOverflow)?;
     let current_sqrt_price = amm_pool_state.sqrt_price;
     drop(amm_pool_data);
 
-    // Check if position is undercollateralized
-    let collateral_ratio = ctx.accounts.short_position.get_collateral_ratio(current_sqrt_price)?;
+    let collateral_ratio = ctx
+        .accounts
+        .short_position
+        .get_collateral_ratio(current_sqrt_price)?;
     require!(
         collateral_ratio < lending_pool.liquidation_threshold as u128,
         ErrorCode::PositionHealthy
@@ -117,7 +107,6 @@ pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Res
 
     let borrowed_amount = ctx.accounts.short_position.borrowed_amount;
 
-    // 1. Buy back Token A using pool reserves
     let swap_params = SwapParameters {
         amount_in: max_sol_in,
         minimum_amount_out: borrowed_amount,
@@ -157,7 +146,6 @@ pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Res
         .checked_sub(vault_balance_after)
         .ok_or(ErrorCode::MathOverflow)?;
 
-    // 2. Return borrowed Token A to AMM
     token::transfer(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
@@ -173,8 +161,10 @@ pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Res
 
     lending_pool.remove_borrowed(borrowed_amount)?;
 
-    // 3. Calculate liquidation bonus (5% of remaining collateral)
-    let total_collateral = ctx.accounts.short_position.collateral_amount
+    let total_collateral = ctx
+        .accounts
+        .short_position
+        .collateral_amount
         .checked_add(ctx.accounts.short_position.sol_from_swap)
         .ok_or(ErrorCode::MathOverflow)?;
 
@@ -192,7 +182,6 @@ pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Res
         .checked_div(100)
         .ok_or(ErrorCode::MathOverflow)?;
 
-    // 4. Pay liquidator bonus
     if liquidation_bonus > 0 {
         token::transfer(
             CpiContext::new_with_signer(
@@ -208,13 +197,11 @@ pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Res
         )?;
     }
 
-    // 5. Update pool reserves
     lending_pool.remove_reserves(total_collateral)?;
     if liquidation_bonus > 0 {
         lending_pool.remove_reserves(liquidation_bonus)?;
     }
 
-    // 6. Close temp Token A account
     close_account(CpiContext::new_with_signer(
         ctx.accounts.token_program.to_account_info(),
         CloseAccount {
@@ -225,8 +212,7 @@ pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Res
         signer,
     ))?;
 
-    // 7. Mark position as liquidated
-    ctx.accounts.short_position.status = 2; // Liquidated
+    ctx.accounts.short_position.status = 2; // liquidated
     lending_pool.decrement_positions()?;
 
     msg!("Position liquidated");
@@ -235,4 +221,3 @@ pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Res
 
     Ok(())
 }
-

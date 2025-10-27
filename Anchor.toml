@@ -1,21 +1,21 @@
+[toolchain]
+anchor_version = "0.31.0"
+solana_version = "2.1.0"
+
 [features]
-seeds = false
+resolution = true
 skip-lint = false
 
 [programs.localnet]
-cp_amm = "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG"
-lending_pool = "9o42VBepS4qZHsPcCY8rn9G9YFqs3RtZB7TEK4DWAu8Y"
+cp_amm = "5XYfSstjk4gdqz8eBNqVk9m4aoMPqcoVFQfJVWEDWPEE"
+lending_pool = "HTCZF6mSGFxxKrmpNh1AyDbgCQmqgpALL75D128e5f2C"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Localnet"
+cluster = "localnet"
 wallet = "keys/local/admin-bossj3JvwiNK7pvjr149DqdtJxf2gdygbcmEPTkb2F1.json"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/lendingPool.test.ts"
-
-[toolchain]
-anchor_version = "0.31.0"
-solana_version = "2.1.0"

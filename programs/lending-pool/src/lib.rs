@@ -6,7 +6,7 @@ pub mod state;
 pub use instructions::*;
 pub use state::*;
 
-declare_id!("9o42VBepS4qZHsPcCY8rn9G9YFqs3RtZB7TEK4DWAu8Y");
+declare_id!("HTCZF6mSGFxxKrmpNh1AyDbgCQmqgpALL75D128e5f2C");
 
 #[program]
 pub mod lending_pool {
@@ -38,4 +38,3 @@ pub mod lending_pool {
         instructions::handle_liquidate(ctx, params)
     }
 }
-

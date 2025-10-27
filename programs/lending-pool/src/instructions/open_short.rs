@@ -2,22 +2,19 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use cp_amm::{cpi::accounts::SwapCtx as AmmSwapCtx, program::CpAmm, SwapParameters};
 
-use crate::state::{ErrorCode, LendingPool, ShortPosition};
-
-#[derive(AnchorSerialize, AnchorDeserialize)]
-pub struct OpenShortParams {
-    /// Amount of SOL to deposit as collateral
-    pub collateral_amount: u64,
-    /// Amount of Token A to borrow and short
-    pub borrow_amount: u64,
-    /// Minimum amount of SOL expected from the swap (slippage protection)
-    pub minimum_sol_out: u64,
-}
+use crate::state::{ErrorCode, LendingPool, OpenShortParams, ShortPosition};
 
 #[derive(Accounts)]
 pub struct OpenShort<'info> {
+    pub cp_amm_program: Program<'info, CpAmm>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+
     #[account(mut)]
     pub lending_pool: AccountLoader<'info, LendingPool>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
 
     #[account(
         init,
@@ -40,21 +37,15 @@ pub struct OpenShort<'info> {
     /// CHECK: pool authority PDA
     pub pool_authority: UncheckedAccount<'info>,
 
-    /// Token A mint (the token being shorted)
     pub token_a_mint: Account<'info, Mint>,
-
-    /// Token B mint (SOL/stable)
     pub token_b_mint: Account<'info, Mint>,
 
-    /// AMM's Token A vault
     #[account(mut)]
     pub amm_token_a_vault: Account<'info, TokenAccount>,
 
-    /// AMM's Token B vault
     #[account(mut)]
     pub amm_token_b_vault: Account<'info, TokenAccount>,
 
-    /// Lending pool's Token B vault
     #[account(
         mut,
         seeds = [b"token_b_vault", lending_pool.key().as_ref()],
@@ -62,12 +53,9 @@ pub struct OpenShort<'info> {
     )]
     pub lending_pool_vault: Account<'info, TokenAccount>,
 
-    /// User's Token B account (to deposit collateral)
     #[account(mut)]
     pub user_token_b_account: Account<'info, TokenAccount>,
 
-    /// Temporary Token A account for the swap
-    /// This will receive the borrowed Token A before swapping
     #[account(
         init,
         payer = user,
@@ -77,15 +65,6 @@ pub struct OpenShort<'info> {
         bump
     )]
     pub temp_token_a_account: Account<'info, TokenAccount>,
-
-    /// User executing the short
-    #[account(mut)]
-    pub user: Signer<'info>,
-
-    pub cp_amm_program: Program<'info, CpAmm>,
-    pub token_program: Program<'info, Token>,
-    pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
 }
 
 pub fn handle_open_short(ctx: Context<OpenShort>, params: OpenShortParams) -> Result<()> {
@@ -99,8 +78,7 @@ pub fn handle_open_short(ctx: Context<OpenShort>, params: OpenShortParams) -> Re
     require!(borrow_amount > 0, ErrorCode::InvalidSwapAmount);
 
     let mut lending_pool = ctx.accounts.lending_pool.load_mut()?;
-    
-    // Calculate protocol fee
+
     let protocol_fee = (collateral_amount as u128)
         .checked_mul(lending_pool.protocol_fee_bps as u128)
         .ok_or(ErrorCode::MathOverflow)?
@@ -111,7 +89,6 @@ pub fn handle_open_short(ctx: Context<OpenShort>, params: OpenShortParams) -> Re
         .checked_sub(protocol_fee)
         .ok_or(ErrorCode::MathOverflow)?;
 
-    // 1. Transfer collateral from user to lending pool vault
     token::transfer(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
@@ -125,13 +102,11 @@ pub fn handle_open_short(ctx: Context<OpenShort>, params: OpenShortParams) -> Re
     )?;
 
     lending_pool.add_reserves(net_collateral)?;
-    lending_pool.protocol_fees = lending_pool.protocol_fees
+    lending_pool.protocol_fees = lending_pool
+        .protocol_fees
         .checked_add(protocol_fee)
         .ok_or(ErrorCode::MathOverflow)?;
 
-    // 2. Borrow Token A from AMM pool by transferring from AMM vault to temp account
-    // Note: This is a simplified version. In production, you'd need proper authorization
-    // and the AMM would need to support lending functionality
     let lending_pool_key = ctx.accounts.lending_pool.key();
     let amm_pool_key = ctx.accounts.amm_pool.key();
     let seeds = &[
@@ -141,8 +116,6 @@ pub fn handle_open_short(ctx: Context<OpenShort>, params: OpenShortParams) -> Re
     ];
     let signer = &[&seeds[..]];
 
-    // Transfer borrowed Token A to temp account
-    // This simulates borrowing - in production this would be a more complex operation
     token::transfer(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
@@ -158,13 +131,11 @@ pub fn handle_open_short(ctx: Context<OpenShort>, params: OpenShortParams) -> Re
 
     lending_pool.add_borrowed(borrow_amount)?;
 
-    // 3. Swap Token A for Token B (SOL) using the AMM
     let swap_params = SwapParameters {
         amount_in: borrow_amount,
         minimum_amount_out: minimum_sol_out,
     };
 
-    // Get current pool state to record entry price
     let amm_pool_data = ctx.accounts.amm_pool.try_borrow_data()?;
     let amm_pool_state = bytemuck::try_from_bytes::<cp_amm::state::Pool>(&amm_pool_data[8..])
         .map_err(|_| ErrorCode::MathOverflow)?;
@@ -195,18 +166,19 @@ pub fn handle_open_short(ctx: Context<OpenShort>, params: OpenShortParams) -> Re
         swap_params,
     )?;
 
-    // Get the amount received from swap
     ctx.accounts.lending_pool_vault.reload()?;
     let vault_balance_after = ctx.accounts.lending_pool_vault.amount;
     let sol_from_swap = vault_balance_after
         .checked_sub(net_collateral)
         .ok_or(ErrorCode::InvalidSwapAmount)?;
 
-    require!(sol_from_swap >= minimum_sol_out, ErrorCode::SlippageExceeded);
+    require!(
+        sol_from_swap >= minimum_sol_out,
+        ErrorCode::SlippageExceeded
+    );
 
     lending_pool.add_reserves(sol_from_swap)?;
 
-    // 4. Initialize the short position
     ctx.accounts.short_position.initialize(
         lending_pool_key,
         ctx.accounts.user.key(),
@@ -219,8 +191,10 @@ pub fn handle_open_short(ctx: Context<OpenShort>, params: OpenShortParams) -> Re
 
     lending_pool.increment_positions()?;
 
-    // Calculate and verify collateral ratio
-    let collateral_ratio = ctx.accounts.short_position.get_collateral_ratio(entry_sqrt_price)?;
+    let collateral_ratio = ctx
+        .accounts
+        .short_position
+        .get_collateral_ratio(entry_sqrt_price)?;
     require!(
         collateral_ratio >= lending_pool.min_collateral_ratio as u128,
         ErrorCode::InsufficientCollateral
@@ -234,4 +208,3 @@ pub fn handle_open_short(ctx: Context<OpenShort>, params: OpenShortParams) -> Re
 
     Ok(())
 }
-
