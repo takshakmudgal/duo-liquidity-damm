@@ -5,6 +5,19 @@ use crate::state::LendingPool;
 
 #[derive(Accounts)]
 pub struct InitializeLendingPool<'info> {
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub token_a_mint: Account<'info, Mint>,
+    pub token_b_mint: Account<'info, Mint>,
+    pub authority: Signer<'info>,
+
+    /// CHECK: no need for check, only for pda (only pubkey needed)
+    #[account()]
+    pub amm_pool: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
     #[account(
         init,
         payer = payer,
@@ -13,13 +26,6 @@ pub struct InitializeLendingPool<'info> {
         bump
     )]
     pub lending_pool: AccountLoader<'info, LendingPool>,
-
-    /// CHECK: validated in CPI calls
-    pub amm_pool: UncheckedAccount<'info>,
-
-    pub token_a_mint: Account<'info, Mint>,
-
-    pub token_b_mint: Account<'info, Mint>,
 
     #[account(
         init,
@@ -30,15 +36,6 @@ pub struct InitializeLendingPool<'info> {
         bump
     )]
     pub token_b_vault: Account<'info, TokenAccount>,
-
-    pub authority: Signer<'info>,
-
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
-    pub rent: Sysvar<'info, Rent>,
 }
 
 pub fn handle_initialize_lending_pool(
@@ -62,7 +59,6 @@ pub fn handle_initialize_lending_pool(
 
     let mut lending_pool = ctx.accounts.lending_pool.load_init()?;
     let bump = ctx.bumps.lending_pool;
-
     lending_pool.initialize(
         ctx.accounts.authority.key(),
         ctx.accounts.amm_pool.key(),

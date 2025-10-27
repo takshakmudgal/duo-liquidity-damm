@@ -1,53 +1,71 @@
-import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import { AnchorProvider, Program, Wallet } from "@coral-xyz/anchor";
 import { LendingPool } from "../target/types/lending_pool";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import LendingPoolIDL from "../target/idl/lending_pool.json";
+import {
+  Connection,
+  Keypair,
+  LAMPORTS_PER_SOL,
+  PublicKey,
+} from "@solana/web3.js";
 import { createMint } from "@solana/spl-token";
+import { assert } from "chai";
 
-describe("lending-pool", () => {
-  const provider = anchor.AnchorProvider.env();
-  const connection = provider.connection;
-  const wallet = provider.wallet as anchor.Wallet;
-  anchor.setProvider(provider);
-  const program = anchor.workspace.LendingPool as Program<LendingPool>;
+describe("lending_pool", () => {
+  const wallet = new Wallet(Keypair.generate());
+  const connection = new Connection("http://127.0.0.1:8899", "confirmed");
+  const provider = new AnchorProvider(connection, wallet, {});
+  const program = new Program<LendingPool>(
+    LendingPoolIDL as LendingPool,
+    provider
+  );
 
-  let tokenAMint: PublicKey;
-  let tokenBMint: PublicKey;
-  let ammPool: Keypair;
+  it("init_lending_pool", async () => {
+    const sig = await connection.requestAirdrop(
+      wallet.publicKey,
+      200 * LAMPORTS_PER_SOL
+    );
+    await connection.confirmTransaction(sig, "confirmed");
 
-  before(async () => {
-    tokenAMint = await createMint(
+    const tokenAMint = await createMint(
       connection,
       wallet.payer,
       wallet.publicKey,
       null,
-      9
+      6
     );
-    tokenBMint = await createMint(
+    const tokenBMint = await createMint(
       connection,
       wallet.payer,
       wallet.publicKey,
       null,
-      9
+      6
     );
-    ammPool = Keypair.generate();
-  });
 
-  it("init lending pool", async () => {
-    // const [lendingPoolPda] = PublicKey.findProgramAddressSync(
-    //   [Buffer.from("lending_pool"), ammPool.publicKey.toBuffer()],
-    //   program.programId
-    // );
+    const ammPool = Keypair.generate().publicKey;
 
-    // const [tokenBVaultPda] = PublicKey.findProgramAddressSync(
-    //   [Buffer.from("token_b_vault"), lendingPoolPda.toBuffer()],
-    //   program.programId
-    // );
+    const [lendingPoolPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("lending_pool"), ammPool.toBuffer()],
+      program.programId
+    );
 
-    const tx = await program.methods
-      .initializeLendingPool(15000, 12000, 100)
-      .rpc({ skipPreflight: true });
+    await program.methods
+      .initializeLendingPool(15000, 12000, 50)
+      .accounts({
+        tokenAMint,
+        tokenBMint,
+        authority: wallet.publicKey,
+        ammPool,
+        payer: wallet.publicKey,
+      })
+      .rpc();
 
-    console.log(tx);
+    const lendingPool = await program.account.lendingPool.fetch(lendingPoolPda);
+
+    assert.equal(lendingPool.authority.toString(), wallet.publicKey.toString());
+    assert.equal(lendingPool.minCollateralRatio, 15000);
+    assert.equal(lendingPool.liquidationThreshold, 12000);
+    assert.equal(lendingPool.protocolFeeBps, 50);
+    assert.equal(lendingPool.totalReserves.toString(), "0");
+    assert.equal(lendingPool.totalBorrowed.toString(), "0");
   });
 });

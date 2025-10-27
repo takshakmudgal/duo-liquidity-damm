@@ -36,6 +36,13 @@ pub struct ShortPosition {
     pub _padding: [u8; 6],
 }
 
+#[account]
+pub struct OpenShortParams {
+    pub collateral_amount: u64,
+    pub borrow_amount: u64,
+    pub minimum_sol_out: u64,
+}
+
 impl LendingPool {
     pub const LEN: usize = 8 + LendingPool::INIT_SPACE;
 

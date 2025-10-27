@@ -6,7 +6,6 @@ use crate::state::{ErrorCode, LendingPool, ShortPosition};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct CloseShortParams {
-    /// Maximum amount of SOL willing to spend to buy back Token A
     pub max_sol_in: u64,
 }
 
@@ -36,21 +35,16 @@ pub struct CloseShort<'info> {
     /// CHECK: pool authority PDA
     pub pool_authority: UncheckedAccount<'info>,
 
-    /// Token A mint
     pub token_a_mint: Account<'info, Mint>,
 
-    /// Token B mint
     pub token_b_mint: Account<'info, Mint>,
 
-    /// AMM's Token A vault
     #[account(mut)]
     pub amm_token_a_vault: Account<'info, TokenAccount>,
 
-    /// AMM's Token B vault
     #[account(mut)]
     pub amm_token_b_vault: Account<'info, TokenAccount>,
 
-    /// Lending pool's Token B vault
     #[account(
         mut,
         seeds = [b"token_b_vault", lending_pool.key().as_ref()],
@@ -58,11 +52,9 @@ pub struct CloseShort<'info> {
     )]
     pub lending_pool_vault: Account<'info, TokenAccount>,
 
-    /// User's Token B account (to receive proceeds or pay deficit)
     #[account(mut)]
     pub user_token_b_account: Account<'info, TokenAccount>,
 
-    /// Temporary Token A account to receive bought-back tokens
     #[account(
         mut,
         seeds = [b"temp_token_a", short_position.key().as_ref()],
@@ -70,10 +62,8 @@ pub struct CloseShort<'info> {
     )]
     pub temp_token_a_account: Account<'info, TokenAccount>,
 
-    /// Owner of the position
     pub owner: Signer<'info>,
 
-    /// User paying for the transaction (can be same as owner)
     #[account(mut)]
     pub user: Signer<'info>,
 
@@ -100,8 +90,6 @@ pub fn handle_close_short(ctx: Context<CloseShort>, params: CloseShortParams) ->
 
     let borrowed_amount = ctx.accounts.short_position.borrowed_amount;
 
-    // 1. Buy back Token A from the AMM using SOL from the lending pool vault
-    // We need to swap Token B (SOL) -> Token A
     let swap_params = SwapParameters {
         amount_in: max_sol_in,
         minimum_amount_out: borrowed_amount,
@@ -147,7 +135,6 @@ pub fn handle_close_short(ctx: Context<CloseShort>, params: CloseShortParams) ->
         ErrorCode::InvalidSwapAmount
     );
 
-    // 2. Return borrowed Token A to the AMM pool
     token::transfer(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
@@ -163,16 +150,20 @@ pub fn handle_close_short(ctx: Context<CloseShort>, params: CloseShortParams) ->
 
     lending_pool.remove_borrowed(borrowed_amount)?;
 
-    // 3. Calculate PnL and settle with user
     let (pnl_amount, is_profit) = ctx.accounts.short_position.calculate_pnl(buyback_cost)?;
 
-    let total_collateral = ctx.accounts.short_position.collateral_amount
+    let total_collateral = ctx
+        .accounts
+        .short_position
+        .collateral_amount
         .checked_add(ctx.accounts.short_position.sol_from_swap)
         .ok_or(ErrorCode::MathOverflow)?;
 
     if is_profit {
-        // User made profit - return collateral + profit
-        let total_return = ctx.accounts.short_position.collateral_amount
+        let total_return = ctx
+            .accounts
+            .short_position
+            .collateral_amount
             .checked_add(pnl_amount)
             .ok_or(ErrorCode::MathOverflow)?;
 
@@ -193,10 +184,11 @@ pub fn handle_close_short(ctx: Context<CloseShort>, params: CloseShortParams) ->
 
         msg!("Position closed with profit: {} SOL", pnl_amount);
     } else {
-        // User made loss
         if pnl_amount <= ctx.accounts.short_position.collateral_amount {
-            // Loss is less than collateral - return remaining collateral
-            let remaining = ctx.accounts.short_position.collateral_amount
+            let remaining = ctx
+                .accounts
+                .short_position
+                .collateral_amount
                 .checked_sub(pnl_amount)
                 .ok_or(ErrorCode::MathOverflow)?;
 
@@ -219,12 +211,10 @@ pub fn handle_close_short(ctx: Context<CloseShort>, params: CloseShortParams) ->
 
             msg!("Position closed with loss: {} SOL", pnl_amount);
         } else {
-            // Loss exceeds collateral - user needs to pay additional
             let deficit = pnl_amount
                 .checked_sub(ctx.accounts.short_position.collateral_amount)
                 .ok_or(ErrorCode::MathOverflow)?;
 
-            // User must pay deficit
             token::transfer(
                 CpiContext::new(
                     ctx.accounts.token_program.to_account_info(),
@@ -237,14 +227,15 @@ pub fn handle_close_short(ctx: Context<CloseShort>, params: CloseShortParams) ->
                 deficit,
             )?;
 
-            // Remove only the swap proceeds, keep the deficit as new reserves
             lending_pool.remove_reserves(ctx.accounts.short_position.sol_from_swap)?;
 
-            msg!("Position closed with large loss: {} SOL (deficit paid)", pnl_amount);
+            msg!(
+                "Position closed with large loss: {} SOL (deficit paid)",
+                pnl_amount
+            );
         }
     }
 
-    // 4. Close the temp Token A account
     close_account(CpiContext::new_with_signer(
         ctx.accounts.token_program.to_account_info(),
         CloseAccount {
@@ -255,7 +246,6 @@ pub fn handle_close_short(ctx: Context<CloseShort>, params: CloseShortParams) ->
         signer,
     ))?;
 
-    // 5. Mark position as closed
     ctx.accounts.short_position.status = 1; // Closed
     lending_pool.decrement_positions()?;
 
@@ -264,4 +254,3 @@ pub fn handle_close_short(ctx: Context<CloseShort>, params: CloseShortParams) ->
 
     Ok(())
 }
-
