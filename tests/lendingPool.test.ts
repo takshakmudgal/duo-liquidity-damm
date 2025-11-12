@@ -24,12 +24,16 @@ describe("lending_pool", () => {
   let ammPool: string = "8Pm2kZpnxD3hoMmt4bjStX2Pw2Z9abpbHzZxMPqxPmie";
   let lendingPoolPda: any;
   let user: any;
-  let tokenBVault: any;
   let creator: any;
   let payerTokenA: any;
   let payerTokenB: any;
   let pool: any;
-  let programPubkey: any;
+  let programPubkey: PublicKey = new PublicKey(
+    "5XYfSstjk4gdqz8eBNqVk9m4aoMPqcoVFQfJVWEDWPEE"
+  );
+  let positionNftMint: any;
+  let tokenAVault: any;
+  let tokenBVault: any;
 
   const raw = [
     {
@@ -43,6 +47,16 @@ describe("lending_pool", () => {
     borrowAmount: new BN(r.borrow_amount),
     minimumSolOut: new BN(r.minimum_sol_out),
   }));
+
+  function deriveTokenVaultAddress(
+    tokenMint: PublicKey,
+    pool: PublicKey
+  ): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("token_vault"), tokenMint.toBuffer(), pool.toBuffer()],
+      programPubkey
+    )[0];
+  }
 
   before("create accounts", async () => {
     payer = Keypair.generate();
@@ -78,8 +92,18 @@ describe("lending_pool", () => {
     );
     await connection.confirmTransaction(userAirdrop);
 
-    pool = Keypair.generate().publicKey;
-    programPubkey = Keypair.generate().publicKey;
+    pool = Keypair.generate();
+
+    tokenAVault = deriveTokenVaultAddress(tokenAMint, pool.publicKey);
+    tokenBVault = deriveTokenVaultAddress(tokenBMint, pool.publicKey);
+
+    positionNftMint = await createMint(
+      connection,
+      payer,
+      payer.publicKey,
+      null,
+      0
+    );
 
     console.log("========== ACCOUNT PUBLIC KEYS ==========");
     console.log("payer:", payer.publicKey.toString());
@@ -89,9 +113,13 @@ describe("lending_pool", () => {
     console.log("tokenBMint:", tokenBMint.toString());
     console.log("payerTokenA:", payerTokenA.toString());
     console.log("payerTokenB:", payerTokenB.toString());
-    console.log("pool:", pool.toString());
+    console.log("pool:", pool.publicKey.toString());
     console.log("programPubkey:", programPubkey.toString());
     console.log("TOKEN_PROGRAM_ID:", TOKEN_PROGRAM_ID.toString());
+
+    console.log("TOKEN_PROGRAM_ID:", tokenAVault.toString());
+    console.log("TOKEN_PROGRAM_ID:", tokenBVault.toString());
+
     console.log("=========================================");
   });
 
@@ -120,15 +148,9 @@ describe("lending_pool", () => {
       })
       .accounts({
         creator: creator.publicKey,
-        positionNftMint: await createMint(
-          connection,
-          payer,
-          payer.publicKey,
-          null,
-          0
-        ),
-        payer,
-        pool,
+        positionNftMint: positionNftMint,
+        payer: payer,
+        pool: pool.publicKey,
         tokenAMint,
         tokenBMint,
         payerTokenA,
@@ -136,16 +158,12 @@ describe("lending_pool", () => {
         tokenAProgram: TOKEN_PROGRAM_ID,
         tokenBProgram: TOKEN_PROGRAM_ID,
         program: programPubkey,
+        tokenAVault,
+        tokenBVault,
       })
-      .signers([payer.publicKey])
       .rpc();
-
     await new Promise((resolve) =>
       setTimeout(async () => {
-        const res = await connection.getParsedTransaction(tx, "confirmed");
-
-        console.log(res);
-
         resolve(null);
       }, 1000)
     );
