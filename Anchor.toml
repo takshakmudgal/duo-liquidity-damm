@@ -7,8 +7,8 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-cp_amm = "5XYfSstjk4gdqz8eBNqVk9m4aoMPqcoVFQfJVWEDWPEE"
-lending_pool = "HTCZF6mSGFxxKrmpNh1AyDbgCQmqgpALL75D128e5f2C"
+cp_amm = "qRBW9ZquC4NXj1Q8zFqMxvJoNwvFfwD2Mznf8G8rrns"
+lending_pool = "E65Dsa4sKTEG5XPQSWzshvRBboCSLUrGZZyovuGMPQfn"
 
 [registry]
 url = "https://api.apr.dev"

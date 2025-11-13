@@ -6,7 +6,7 @@ pub mod state;
 pub use instructions::*;
 pub use state::*;
 
-declare_id!("HTCZF6mSGFxxKrmpNh1AyDbgCQmqgpALL75D128e5f2C");
+declare_id!("E65Dsa4sKTEG5XPQSWzshvRBboCSLUrGZZyovuGMPQfn");
 
 #[program]
 pub mod lending_pool {

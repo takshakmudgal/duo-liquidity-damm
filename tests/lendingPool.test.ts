@@ -12,6 +12,7 @@ import { BN } from "bn.js";
 import { CpAmm } from "../target/types/cp_amm";
 import { createAssociatedTokenAccount } from "@solana/spl-token";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { mintTo } from "@solana/spl-token";
 
 describe("lending_pool", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
@@ -28,12 +29,12 @@ describe("lending_pool", () => {
   let payerTokenA: any;
   let payerTokenB: any;
   let pool: any;
-  let programPubkey: PublicKey = new PublicKey(
-    "5XYfSstjk4gdqz8eBNqVk9m4aoMPqcoVFQfJVWEDWPEE"
-  );
+  let programPubkey: PublicKey = ammProgram.programId;
   let positionNftMint: any;
+  let positionNftAccount: any;
   let tokenAVault: any;
   let tokenBVault: any;
+  let position: any;
 
   const raw = [
     {
@@ -48,79 +49,112 @@ describe("lending_pool", () => {
     minimumSolOut: new BN(r.minimum_sol_out),
   }));
 
-  function deriveTokenVaultAddress(
-    tokenMint: PublicKey,
-    pool: PublicKey
-  ): PublicKey {
-    return PublicKey.findProgramAddressSync(
-      [Buffer.from("token_vault"), tokenMint.toBuffer(), pool.toBuffer()],
-      programPubkey
-    )[0];
-  }
-
   before("create accounts", async () => {
     payer = Keypair.generate();
+    positionNftMint = Keypair.generate();
+    user = Keypair.generate();
+    creator = Keypair.generate();
+
+    const userAirdrop = await connection.requestAirdrop(
+      user.publicKey,
+      500 * LAMPORTS_PER_SOL
+    );
+    await connection.confirmTransaction(userAirdrop);
     const payerAirdrop = await connection.requestAirdrop(
       payer.publicKey,
       300 * LAMPORTS_PER_SOL
     );
     await connection.confirmTransaction(payerAirdrop);
-    creator = Keypair.generate();
     const creatorAirdrop = await connection.requestAirdrop(
       creator.publicKey,
       300 * LAMPORTS_PER_SOL
     );
     await connection.confirmTransaction(creatorAirdrop);
+
     tokenAMint = await createMint(connection, payer, payer.publicKey, null, 2);
     tokenBMint = await createMint(connection, payer, payer.publicKey, null, 2);
+
     payerTokenA = await createAssociatedTokenAccount(
       connection,
       payer,
       tokenAMint,
       payer.publicKey
     );
-    user = Keypair.generate();
+
     payerTokenB = await createAssociatedTokenAccount(
       connection,
       payer,
       tokenBMint,
-      creator.publicKey
+      payer.publicKey
     );
-    const userAirdrop = await connection.requestAirdrop(
-      user.publicKey,
-      500 * LAMPORTS_PER_SOL
-    );
-    await connection.confirmTransaction(userAirdrop);
 
-    pool = Keypair.generate();
-
-    tokenAVault = deriveTokenVaultAddress(tokenAMint, pool.publicKey);
-    tokenBVault = deriveTokenVaultAddress(tokenBMint, pool.publicKey);
-
-    positionNftMint = await createMint(
+    await mintTo(
       connection,
       payer,
+      tokenAMint,
+      payerTokenA,
       payer.publicKey,
-      null,
-      0
+      100000000
     );
 
-    console.log("========== ACCOUNT PUBLIC KEYS ==========");
-    console.log("payer:", payer.publicKey.toString());
-    console.log("creator:", creator.publicKey.toString());
-    console.log("user:", user.publicKey.toString());
-    console.log("tokenAMint:", tokenAMint.toString());
-    console.log("tokenBMint:", tokenBMint.toString());
-    console.log("payerTokenA:", payerTokenA.toString());
-    console.log("payerTokenB:", payerTokenB.toString());
-    console.log("pool:", pool.publicKey.toString());
-    console.log("programPubkey:", programPubkey.toString());
-    console.log("TOKEN_PROGRAM_ID:", TOKEN_PROGRAM_ID.toString());
+    await mintTo(
+      connection,
+      payer,
+      tokenBMint,
+      payerTokenB,
+      payer.publicKey,
+      100000000
+    );
 
-    console.log("TOKEN_PROGRAM_ID:", tokenAVault.toString());
-    console.log("TOKEN_PROGRAM_ID:", tokenBVault.toString());
+    function getMaxKey(key1: PublicKey, key2: PublicKey): Buffer {
+      const buf1 = key1.toBuffer();
+      const buf2 = key2.toBuffer();
+      if (Buffer.compare(buf1, buf2) === 1) {
+        return buf1;
+      }
+      return buf2;
+    }
 
-    console.log("=========================================");
+    function getMinKey(key1: PublicKey, key2: PublicKey): Buffer {
+      const buf1 = key1.toBuffer();
+      const buf2 = key2.toBuffer();
+      if (Buffer.compare(buf1, buf2) === 1) {
+        return buf2;
+      }
+      return buf1;
+    }
+
+    pool = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("cpool"),
+        getMaxKey(tokenAMint, tokenBMint),
+        getMinKey(tokenAMint, tokenBMint),
+      ],
+      programPubkey
+    )[0];
+
+    positionNftAccount = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("position_nft_account"),
+        positionNftMint.publicKey.toBuffer(),
+      ],
+      programPubkey
+    )[0];
+
+    position = PublicKey.findProgramAddressSync(
+      [Buffer.from("position"), positionNftMint.publicKey.toBuffer()],
+      programPubkey
+    )[0];
+
+    tokenAVault = PublicKey.findProgramAddressSync(
+      [Buffer.from("token_vault"), tokenAMint.toBuffer(), pool.toBuffer()],
+      programPubkey
+    )[0];
+
+    tokenBVault = PublicKey.findProgramAddressSync(
+      [Buffer.from("token_vault"), tokenBMint.toBuffer(), pool.toBuffer()],
+      programPubkey
+    )[0];
   });
 
   it("amm init", async () => {
@@ -128,66 +162,72 @@ describe("lending_pool", () => {
       .initializeCustomizablePool({
         poolFees: {
           baseFee: {
-            cliffFeeNumerator: new BN(5),
-            numberOfPeriod: 2,
-            periodFrequency: new BN(2),
-            reductionFactor: new BN(10),
-            feeSchedulerMode: 4,
+            cliffFeeNumerator: new BN(1000000),
+            numberOfPeriod: 1,
+            periodFrequency: new BN(1),
+            reductionFactor: new BN(0),
+            feeSchedulerMode: 0,
           },
-          padding: [2, 4, 8],
+          padding: [0, 0, 0],
           dynamicFee: null,
         },
-        sqrtMinPrice: new BN(3455),
-        sqrtMaxPrice: new BN(4543634645),
+        sqrtMinPrice: new BN("4295048016"),
+        sqrtMaxPrice: new BN("79226673521066979257578248091"),
         hasAlphaVault: false,
-        liquidity: new BN(34534),
-        sqrtPrice: new BN(3423),
-        activationType: 5,
-        collectFeeMode: 3,
+        liquidity: new BN("1000000000000"),
+        sqrtPrice: new BN("18446744073709551616"),
+        activationType: 0,
+        collectFeeMode: 0,
         activationPoint: null,
       })
       .accounts({
         creator: creator.publicKey,
-        positionNftMint: positionNftMint,
-        payer: payer,
-        pool: pool.publicKey,
+        positionNftMint: positionNftMint.publicKey,
+        positionNftAccount,
+        payer: payer.publicKey,
+        pool,
+        position,
         tokenAMint,
         tokenBMint,
+        tokenAVault,
+        tokenBVault,
         payerTokenA,
         payerTokenB,
         tokenAProgram: TOKEN_PROGRAM_ID,
         tokenBProgram: TOKEN_PROGRAM_ID,
         program: programPubkey,
-        tokenAVault,
-        tokenBVault,
       })
+      .signers([payer, positionNftMint])
       .rpc();
     await new Promise((resolve) =>
       setTimeout(async () => {
+        const res = await connection.getParsedTransaction(tx, "confirmed");
+        console.log(res);
         resolve(null);
       }, 1000)
     );
   });
 
-  // it("Is initialized", async () => {
-  //   const tx = await program.methods
-  //     .initializeLendingPool(20000, 300, 50)
-  //     .accounts({ tokenAMint, tokenBMint, payer, ammPool })
-  //     .rpc();
+  it("lending pool init", async () => {
+    const tx = await program.methods
+      .initializeLendingPool(20000, 300, 50)
+      .accounts({ tokenAMint, tokenBMint, payer, ammPool })
+      .rpc();
 
-  //   await new Promise((resolve) =>
-  //     setTimeout(async () => {
-  //       const res = await connection.getParsedTransaction(tx, "confirmed");
-  //       lendingPoolPda =
-  //         res?.meta?.innerInstructions?.[0]?.instructions?.[0]?.parsed?.info
-  //           ?.newAccount;
-  //       tokenBVault =
-  //         res?.meta?.innerInstructions?.[0]?.instructions?.[1]?.parsed?.info
-  //           ?.newAccount;
-  //       resolve(null);
-  //     }, 1000)
-  //   );
-  // });
+    await new Promise((resolve) =>
+      setTimeout(async () => {
+        const res = await connection.getParsedTransaction(tx, "confirmed");
+        console.log(res);
+        lendingPoolPda =
+          res?.meta?.innerInstructions?.[0]?.instructions?.[0]?.parsed?.info
+            ?.newAccount;
+        tokenBVault =
+          res?.meta?.innerInstructions?.[0]?.instructions?.[1]?.parsed?.info
+            ?.newAccount;
+        resolve(null);
+      }, 1000)
+    );
+  });
 
   // it("Open Short", async () => {
   //   const tx = await program.methods
