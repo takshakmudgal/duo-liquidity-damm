@@ -1,164 +1,174 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { LendingPool } from "../target/types/lending_pool";
-import { createMint } from "@solana/spl-token";
+import { CpAmm } from "../target/types/cp_amm";
+import {
+  createMint,
+  mintTo,
+  createAssociatedTokenAccount,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import {
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
+  SystemProgram,
 } from "@solana/web3.js";
 import { BN } from "bn.js";
-import { CpAmm } from "../target/types/cp_amm";
-import { createAssociatedTokenAccount } from "@solana/spl-token";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { mintTo } from "@solana/spl-token";
+
+function getKeysSorted(k1: PublicKey, k2: PublicKey) {
+  if (Buffer.compare(k1.toBuffer(), k2.toBuffer()) > 0) {
+    return { max: k1, min: k2 };
+  }
+  return { max: k2, min: k1 };
+}
 
 describe("lending_pool", () => {
-  anchor.setProvider(anchor.AnchorProvider.env());
-  const connection = new Connection("http://127.0.0.1:8899", "confirmed");
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const connection = provider.connection;
+
   const program = anchor.workspace.LendingPool as Program<LendingPool>;
   const ammProgram = anchor.workspace.CpAmm as Program<CpAmm>;
-  let payer: any;
-  let tokenAMint: any;
-  let tokenBMint: any;
-  let ammPool: string = "8Pm2kZpnxD3hoMmt4bjStX2Pw2Z9abpbHzZxMPqxPmie";
-  let lendingPoolPda: any;
-  let user: any;
-  let creator: any;
-  let payerTokenA: any;
-  let payerTokenB: any;
-  let pool: any;
-  let programPubkey: PublicKey = ammProgram.programId;
-  let positionNftMint: any;
-  let positionNftAccount: any;
-  let tokenAVault: any;
-  let tokenBVault: any;
-  let position: any;
 
-  const raw = [
-    {
-      collateral_amount: 50000,
-      borrow_amount: 4000,
-      minimum_sol_out: 40,
-    },
-  ];
-  const openShortParams = raw.map((r) => ({
-    collateralAmount: new BN(r.collateral_amount),
-    borrowAmount: new BN(r.borrow_amount),
-    minimumSolOut: new BN(r.minimum_sol_out),
-  }));
+  let payer = Keypair.generate();
+  let creator = Keypair.generate();
+  let positionNftMint = Keypair.generate();
 
-  before("create accounts", async () => {
-    payer = Keypair.generate();
-    positionNftMint = Keypair.generate();
-    user = Keypair.generate();
-    creator = Keypair.generate();
+  let tokenMaxMint: PublicKey;
+  let tokenMinMint: PublicKey;
 
-    const userAirdrop = await connection.requestAirdrop(
-      user.publicKey,
-      500 * LAMPORTS_PER_SOL
+  // AMM Accounts
+  let ammPool: PublicKey;
+  let ammTokenMaxVault: PublicKey;
+  let ammTokenMinVault: PublicKey;
+  let positionNftAccount: PublicKey;
+  let position: PublicKey;
+  let poolAuthority: PublicKey;
+
+  // Lending Pool Accounts
+  let lendingPoolPda: PublicKey;
+  let lpTokenMaxVault: PublicKey;
+  let lpTokenMinVault: PublicKey;
+
+  let shortPositionPda: PublicKey;
+  let tempTokenAccount: PublicKey;
+  let eventAuthority: PublicKey;
+
+  let payerTokenMax: PublicKey;
+  let payerTokenMin: PublicKey;
+
+  const openShortParams = {
+    collateralAmount: new BN(50000),
+    borrowAmount: new BN(20000),
+    minimumSolOut: new BN(0),
+  };
+
+  before("Setup Environment", async () => {
+    await Promise.all([
+      connection.requestAirdrop(payer.publicKey, 100 * LAMPORTS_PER_SOL),
+      connection.requestAirdrop(creator.publicKey, 100 * LAMPORTS_PER_SOL),
+    ]).then((sigs) =>
+      Promise.all(sigs.map((s) => connection.confirmTransaction(s)))
     );
-    await connection.confirmTransaction(userAirdrop);
-    const payerAirdrop = await connection.requestAirdrop(
-      payer.publicKey,
-      300 * LAMPORTS_PER_SOL
-    );
-    await connection.confirmTransaction(payerAirdrop);
-    const creatorAirdrop = await connection.requestAirdrop(
-      creator.publicKey,
-      300 * LAMPORTS_PER_SOL
-    );
-    await connection.confirmTransaction(creatorAirdrop);
 
-    tokenAMint = await createMint(connection, payer, payer.publicKey, null, 2);
-    tokenBMint = await createMint(connection, payer, payer.publicKey, null, 2);
+    const mintA = await createMint(connection, payer, payer.publicKey, null, 6);
+    const mintB = await createMint(connection, payer, payer.publicKey, null, 6);
 
-    payerTokenA = await createAssociatedTokenAccount(
+    const sorted = getKeysSorted(mintA, mintB);
+    tokenMaxMint = sorted.max;
+    tokenMinMint = sorted.min;
+
+    payerTokenMax = await createAssociatedTokenAccount(
       connection,
       payer,
-      tokenAMint,
+      tokenMaxMint,
       payer.publicKey
     );
-
-    payerTokenB = await createAssociatedTokenAccount(
+    payerTokenMin = await createAssociatedTokenAccount(
       connection,
       payer,
-      tokenBMint,
+      tokenMinMint,
       payer.publicKey
     );
 
     await mintTo(
       connection,
       payer,
-      tokenAMint,
-      payerTokenA,
+      tokenMaxMint,
+      payerTokenMax,
       payer.publicKey,
-      100000000
+      1_000_000_000_000
     );
-
     await mintTo(
       connection,
       payer,
-      tokenBMint,
-      payerTokenB,
+      tokenMinMint,
+      payerTokenMin,
       payer.publicKey,
-      100000000
+      1_000_000_000_000
     );
 
-    function getMaxKey(key1: PublicKey, key2: PublicKey): Buffer {
-      const buf1 = key1.toBuffer();
-      const buf2 = key2.toBuffer();
-      if (Buffer.compare(buf1, buf2) === 1) {
-        return buf1;
-      }
-      return buf2;
-    }
+    // AMM Derivation
+    [ammPool] = PublicKey.findProgramAddressSync(
+      [Buffer.from("cpool"), tokenMaxMint.toBuffer(), tokenMinMint.toBuffer()],
+      ammProgram.programId
+    );
 
-    function getMinKey(key1: PublicKey, key2: PublicKey): Buffer {
-      const buf1 = key1.toBuffer();
-      const buf2 = key2.toBuffer();
-      if (Buffer.compare(buf1, buf2) === 1) {
-        return buf2;
-      }
-      return buf1;
-    }
+    [ammTokenMaxVault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("token_vault"), tokenMaxMint.toBuffer(), ammPool.toBuffer()],
+      ammProgram.programId
+    );
 
-    pool = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("cpool"),
-        getMaxKey(tokenAMint, tokenBMint),
-        getMinKey(tokenAMint, tokenBMint),
-      ],
-      programPubkey
-    )[0];
+    [ammTokenMinVault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("token_vault"), tokenMinMint.toBuffer(), ammPool.toBuffer()],
+      ammProgram.programId
+    );
 
-    positionNftAccount = PublicKey.findProgramAddressSync(
+    [positionNftAccount] = PublicKey.findProgramAddressSync(
       [
         Buffer.from("position_nft_account"),
         positionNftMint.publicKey.toBuffer(),
       ],
-      programPubkey
-    )[0];
+      ammProgram.programId
+    );
 
-    position = PublicKey.findProgramAddressSync(
+    [position] = PublicKey.findProgramAddressSync(
       [Buffer.from("position"), positionNftMint.publicKey.toBuffer()],
-      programPubkey
-    )[0];
+      ammProgram.programId
+    );
 
-    tokenAVault = PublicKey.findProgramAddressSync(
-      [Buffer.from("token_vault"), tokenAMint.toBuffer(), pool.toBuffer()],
-      programPubkey
-    )[0];
+    // FIX: Using "vault_authority" seed (Standard for CP-AMM)
+    [poolAuthority] = PublicKey.findProgramAddressSync(
+      [Buffer.from("pool_authority")],
+      ammProgram.programId
+    );
 
-    tokenBVault = PublicKey.findProgramAddressSync(
-      [Buffer.from("token_vault"), tokenBMint.toBuffer(), pool.toBuffer()],
-      programPubkey
-    )[0];
+    [eventAuthority] = PublicKey.findProgramAddressSync(
+      [Buffer.from("__event_authority")],
+      ammProgram.programId
+    );
+
+    // Lending Pool Derivation
+    [lendingPoolPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("lending_pool"), ammPool.toBuffer()],
+      program.programId
+    );
+
+    [lpTokenMaxVault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("token_a_vault"), lendingPoolPda.toBuffer()],
+      program.programId
+    );
+
+    [lpTokenMinVault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("token_b_vault"), lendingPoolPda.toBuffer()],
+      program.programId
+    );
   });
 
-  it("amm init", async () => {
-    const tx = await ammProgram.methods
+  it("Initialize AMM Pool", async () => {
+    await ammProgram.methods
       .initializeCustomizablePool({
         poolFees: {
           baseFee: {
@@ -174,7 +184,7 @@ describe("lending_pool", () => {
         sqrtMinPrice: new BN("4295048016"),
         sqrtMaxPrice: new BN("79226673521066979257578248091"),
         hasAlphaVault: false,
-        liquidity: new BN("1000000000000"),
+        liquidity: new BN("10000000000").mul(new BN("18446744073709551616")),
         sqrtPrice: new BN("18446744073709551616"),
         activationType: 0,
         collectFeeMode: 0,
@@ -185,62 +195,248 @@ describe("lending_pool", () => {
         positionNftMint: positionNftMint.publicKey,
         positionNftAccount,
         payer: payer.publicKey,
-        pool,
+        pool: ammPool,
         position,
-        tokenAMint,
-        tokenBMint,
-        tokenAVault,
-        tokenBVault,
-        payerTokenA,
-        payerTokenB,
+        tokenAMint: tokenMaxMint,
+        tokenBMint: tokenMinMint,
+        tokenAVault: ammTokenMaxVault,
+        tokenBVault: ammTokenMinVault,
+        payerTokenA: payerTokenMax,
+        payerTokenB: payerTokenMin,
         tokenAProgram: TOKEN_PROGRAM_ID,
         tokenBProgram: TOKEN_PROGRAM_ID,
-        program: programPubkey,
+        program: ammProgram.programId,
       })
       .signers([payer, positionNftMint])
       .rpc();
-    await new Promise((resolve) =>
-      setTimeout(async () => {
-        const res = await connection.getParsedTransaction(tx, "confirmed");
-        console.log(res);
-        resolve(null);
-      }, 1000)
+  });
+
+  it("Initialize Lending Pool", async () => {
+    await program.methods
+      .initializeLendingPool(20000, 19000, 300)
+      .accounts({
+        payer: payer.publicKey,
+        authority: payer.publicKey,
+        ammPool: ammPool,
+        tokenAMint: tokenMaxMint,
+        tokenBMint: tokenMinMint,
+        lendingPool: lendingPoolPda,
+        tokenAVault: lpTokenMaxVault,
+        tokenBVault: lpTokenMinVault,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([payer])
+      .rpc();
+  });
+
+  it("Seed Liquidity", async () => {
+    await mintTo(
+      connection,
+      payer,
+      tokenMaxMint,
+      lpTokenMaxVault,
+      payer.publicKey,
+      1_000_000
     );
   });
 
-  it("lending pool init", async () => {
-    const tx = await program.methods
-      .initializeLendingPool(20000, 300, 50)
-      .accounts({ tokenAMint, tokenBMint, payer, ammPool })
+  it("Open Short", async () => {
+    [shortPositionPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("short_position"),
+        lendingPoolPda.toBuffer(),
+        payer.publicKey.toBuffer(),
+      ],
+      program.programId
+    );
+
+    [tempTokenAccount] = PublicKey.findProgramAddressSync(
+      [Buffer.from("temp_token_a"), shortPositionPda.toBuffer()],
+      program.programId
+    );
+
+    await program.methods
+      .openShort(openShortParams)
+      .accounts({
+        lendingPool: lendingPoolPda,
+        user: payer.publicKey,
+        ammPool: ammPool,
+        tokenAMint: tokenMaxMint,
+        tokenBMint: tokenMinMint,
+        ammTokenAVault: ammTokenMaxVault,
+        ammTokenBVault: ammTokenMinVault,
+        tokenAVault: lpTokenMaxVault,
+        tokenBVault: lpTokenMinVault,
+        userTokenBAccount: payerTokenMin,
+        shortPosition: shortPositionPda,
+        tempTokenAAccount: tempTokenAccount,
+        poolAuthority: poolAuthority,
+        eventAuthority: eventAuthority,
+        cpAmmProgram: ammProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([payer])
       .rpc();
 
-    await new Promise((resolve) =>
-      setTimeout(async () => {
-        const res = await connection.getParsedTransaction(tx, "confirmed");
-        console.log(res);
-        lendingPoolPda =
-          res?.meta?.innerInstructions?.[0]?.instructions?.[0]?.parsed?.info
-            ?.newAccount;
-        tokenBVault =
-          res?.meta?.innerInstructions?.[0]?.instructions?.[1]?.parsed?.info
-            ?.newAccount;
-        resolve(null);
-      }, 1000)
-    );
+    console.log("Short Opened Successfully");
   });
 
-  // it("Open Short", async () => {
-  //   const tx = await program.methods
-  //     .openShort(openShortParams[0])
-  //     .accounts({
-  //       lendingPool: lendingPoolPda,
-  //       user,
-  //       ammPool,
-  //       poolAuthority: payer,
-  //       tokenAMint,
-  //       tokenBMint,
-  //       ammTokenBVault: tokenBVault,
-  //     })
-  //     .rpc();
-  // });
+  it("Close Short", async () => {
+    await program.methods
+      .closeShort({
+        maxSolIn: new BN(25000),
+      })
+      .accounts({
+        lendingPool: lendingPoolPda,
+        owner: payer.publicKey,
+        shortPosition: shortPositionPda,
+        ammPool: ammPool,
+        poolAuthority: poolAuthority,
+        tokenAMint: tokenMaxMint,
+        tokenBMint: tokenMinMint,
+        ammTokenAVault: ammTokenMaxVault,
+        ammTokenBVault: ammTokenMinVault,
+        tokenAVault: lpTokenMaxVault,
+        tokenBVault: lpTokenMinVault,
+        userTokenBAccount: payerTokenMin,
+        tempTokenAAccount: tempTokenAccount,
+        eventAuthority: eventAuthority,
+        cpAmmProgram: ammProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([payer])
+      .rpc();
+
+    console.log("Short Closed Successfully");
+  });
+
+  it("Liquidate", async () => {
+    // 1. Setup new user for short position
+    let testUser = Keypair.generate();
+    await connection.requestAirdrop(testUser.publicKey, 10 * LAMPORTS_PER_SOL)
+      .then(sig => connection.confirmTransaction(sig));
+
+    let testUserTokenMin = await createAssociatedTokenAccount(
+      connection,
+      payer,
+      tokenMinMint,
+      testUser.publicKey
+    );
+
+    await mintTo(
+      connection,
+      payer,
+      tokenMinMint,
+      testUserTokenMin,
+      payer.publicKey,
+      100_000_000_000 // Mint plenty
+    );
+
+    const shortPositionParams = {
+      collateralAmount: new BN(50000),
+      borrowAmount: new BN(20000),
+      minimumSolOut: new BN(0),
+    };
+
+    // Derive PDA for testUser
+    let [testShortPositionPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("short_position"),
+        lendingPoolPda.toBuffer(),
+        testUser.publicKey.toBuffer(),
+      ],
+      program.programId
+    );
+
+    let [testTempTokenAccount] = PublicKey.findProgramAddressSync(
+      [Buffer.from("temp_token_a"), testShortPositionPda.toBuffer()],
+      program.programId
+    );
+
+    await program.methods
+      .openShort(shortPositionParams)
+      .accounts({
+        lendingPool: lendingPoolPda,
+        user: testUser.publicKey,
+        ammPool: ammPool,
+        tokenAMint: tokenMaxMint,
+        tokenBMint: tokenMinMint,
+        ammTokenAVault: ammTokenMaxVault,
+        ammTokenBVault: ammTokenMinVault,
+        tokenAVault: lpTokenMaxVault,
+        tokenBVault: lpTokenMinVault,
+        userTokenBAccount: testUserTokenMin,
+        shortPosition: testShortPositionPda,
+        tempTokenAAccount: testTempTokenAccount,
+        poolAuthority: poolAuthority,
+        eventAuthority: eventAuthority,
+        cpAmmProgram: ammProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([testUser])
+      .rpc();
+
+    // 2. Crash the price (Swap B -> A)
+    // Input B, Output A.
+    // We need to swap enough to drop the price of B.
+    // Current Liquidity ~ large.
+    // We minted 300_000_000_000.
+    // Let's swap 10_000_000.
+
+    // We need a swap setup.
+    await ammProgram.methods
+      .swap({
+        amountIn: new BN("3500000000"), // 3.5B Swap
+        minimumAmountOut: new BN(0),
+      })
+      .accounts({
+        poolAuthority: poolAuthority,
+        pool: ammPool,
+        inputTokenAccount: payerTokenMin, // B
+        outputTokenAccount: payerTokenMax, // A
+        tokenAVault: ammTokenMaxVault,
+        tokenBVault: ammTokenMinVault,
+        tokenAMint: tokenMaxMint,
+        tokenBMint: tokenMinMint,
+        payer: payer.publicKey,
+        tokenAProgram: TOKEN_PROGRAM_ID,
+        tokenBProgram: TOKEN_PROGRAM_ID,
+        referralTokenAccount: null,
+        eventAuthority: eventAuthority, // CP-AMM 0.1.4 requires this? Yes in swap instruction.
+      })
+      .signers([payer])
+      .rpc();
+
+    // 3. Liquidate
+    await program.methods
+      .liquidate({
+        maxSolIn: new BN(50000),
+      })
+      .accounts({
+        lendingPool: lendingPoolPda,
+        shortPosition: testShortPositionPda,
+        ammPool: ammPool,
+        poolAuthority: poolAuthority,
+        tokenAMint: tokenMaxMint,
+        tokenBMint: tokenMinMint,
+        ammTokenAVault: ammTokenMaxVault,
+        ammTokenBVault: ammTokenMinVault,
+        tokenAVault: lpTokenMaxVault,
+        tokenBVault: lpTokenMinVault,
+        tempTokenAAccount: testTempTokenAccount,
+        liquidatorRewardAccount: payerTokenMin, // Liquidator gets B
+        liquidator: payer.publicKey,
+        payer: payer.publicKey,
+        cpAmmProgram: ammProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        eventAuthority: eventAuthority,
+      })
+      .signers([payer])
+      .rpc();
+
+    console.log("Liquidation Successful");
+  });
 });

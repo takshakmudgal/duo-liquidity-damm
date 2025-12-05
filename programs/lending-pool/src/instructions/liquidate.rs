@@ -1,13 +1,7 @@
+use crate::state::{ErrorCode, LendingPool, LiquidateParams, ShortPosition};
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, close_account, CloseAccount, Mint, Token, TokenAccount, Transfer};
 use cp_amm::{cpi::accounts::SwapCtx as AmmSwapCtx, program::CpAmm, SwapParameters};
-
-use crate::state::{ErrorCode, LendingPool, ShortPosition};
-
-#[derive(AnchorSerialize, AnchorDeserialize)]
-pub struct LiquidateParams {
-    pub max_sol_in: u64,
-}
 
 #[derive(Accounts)]
 pub struct Liquidate<'info> {
@@ -20,7 +14,6 @@ pub struct Liquidate<'info> {
             b"short_position",
             lending_pool.key().as_ref(),
             short_position.owner.as_ref(),
-            &short_position.lending_pool.to_bytes()[24..32]
         ],
         bump = short_position.bump,
         has_one = lending_pool
@@ -30,25 +23,33 @@ pub struct Liquidate<'info> {
     /// CHECK: validated in CPI
     #[account(mut)]
     pub amm_pool: UncheckedAccount<'info>,
-
     /// CHECK: pool authority PDA
     pub pool_authority: UncheckedAccount<'info>,
+
+    /// CHECK: validated in CPI
+    pub event_authority: UncheckedAccount<'info>,
 
     pub token_a_mint: Account<'info, Mint>,
     pub token_b_mint: Account<'info, Mint>,
 
     #[account(mut)]
     pub amm_token_a_vault: Account<'info, TokenAccount>,
-
     #[account(mut)]
     pub amm_token_b_vault: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"token_a_vault", lending_pool.key().as_ref()],
+        bump
+    )]
+    pub token_a_vault: Account<'info, TokenAccount>,
 
     #[account(
         mut,
         seeds = [b"token_b_vault", lending_pool.key().as_ref()],
         bump
     )]
-    pub lending_pool_vault: Account<'info, TokenAccount>,
+    pub token_b_vault: Account<'info, TokenAccount>,
 
     #[account(
         mut,
@@ -70,14 +71,15 @@ pub struct Liquidate<'info> {
 }
 
 pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Result<()> {
-    let LiquidateParams { max_sol_in } = params;
-
     require!(
         ctx.accounts.short_position.status == 0,
         ErrorCode::PositionNotActive
     );
 
-    let lending_pool = ctx.accounts.lending_pool.load()?;
+    let (lending_pool_bump, liquidation_threshold) = {
+        let pool = ctx.accounts.lending_pool.load()?;
+        (pool.bump, pool.liquidation_threshold)
+    };
 
     let amm_pool_data = ctx.accounts.amm_pool.try_borrow_data()?;
     let amm_pool_state = bytemuck::try_from_bytes::<cp_amm::state::Pool>(&amm_pool_data[8..])
@@ -85,34 +87,24 @@ pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Res
     let current_sqrt_price = amm_pool_state.sqrt_price;
     drop(amm_pool_data);
 
-    let collateral_ratio = ctx
+    let ratio = ctx
         .accounts
         .short_position
         .get_collateral_ratio(current_sqrt_price)?;
     require!(
-        collateral_ratio < lending_pool.liquidation_threshold as u128,
+        ratio < liquidation_threshold as u128,
         ErrorCode::PositionHealthy
     );
-
-    drop(lending_pool);
-    let mut lending_pool = ctx.accounts.lending_pool.load_mut()?;
 
     let amm_pool_key = ctx.accounts.amm_pool.key();
     let seeds = &[
         b"lending_pool".as_ref(),
         amm_pool_key.as_ref(),
-        &[lending_pool.bump],
+        &[lending_pool_bump],
     ];
     let signer = &[&seeds[..]];
 
     let borrowed_amount = ctx.accounts.short_position.borrowed_amount;
-
-    let swap_params = SwapParameters {
-        amount_in: max_sol_in,
-        minimum_amount_out: borrowed_amount,
-    };
-
-    let vault_balance_before = ctx.accounts.lending_pool_vault.amount;
 
     cp_amm::cpi::swap(
         CpiContext::new_with_signer(
@@ -120,7 +112,7 @@ pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Res
             AmmSwapCtx {
                 pool_authority: ctx.accounts.pool_authority.to_account_info(),
                 pool: ctx.accounts.amm_pool.to_account_info(),
-                input_token_account: ctx.accounts.lending_pool_vault.to_account_info(),
+                input_token_account: ctx.accounts.token_b_vault.to_account_info(),
                 output_token_account: ctx.accounts.temp_token_a_account.to_account_info(),
                 token_a_vault: ctx.accounts.amm_token_a_vault.to_account_info(),
                 token_b_vault: ctx.accounts.amm_token_b_vault.to_account_info(),
@@ -130,77 +122,46 @@ pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Res
                 token_a_program: ctx.accounts.token_program.to_account_info(),
                 token_b_program: ctx.accounts.token_program.to_account_info(),
                 referral_token_account: None,
-                event_authority: ctx.accounts.cp_amm_program.to_account_info(),
+                event_authority: ctx.accounts.event_authority.to_account_info(),
                 program: ctx.accounts.cp_amm_program.to_account_info(),
             },
             signer,
         ),
-        swap_params,
+        SwapParameters {
+            amount_in: params.max_sol_in,
+            minimum_amount_out: borrowed_amount,
+        },
     )?;
 
-    ctx.accounts.lending_pool_vault.reload()?;
     ctx.accounts.temp_token_a_account.reload()?;
-
-    let vault_balance_after = ctx.accounts.lending_pool_vault.amount;
-    let buyback_cost = vault_balance_before
-        .checked_sub(vault_balance_after)
-        .ok_or(ErrorCode::MathOverflow)?;
+    let transfer_amount = ctx.accounts.temp_token_a_account.amount;
 
     token::transfer(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
                 from: ctx.accounts.temp_token_a_account.to_account_info(),
-                to: ctx.accounts.amm_token_a_vault.to_account_info(),
+                to: ctx.accounts.token_a_vault.to_account_info(),
                 authority: ctx.accounts.lending_pool.to_account_info(),
             },
             signer,
         ),
-        borrowed_amount,
+        transfer_amount,
     )?;
 
-    lending_pool.remove_borrowed(borrowed_amount)?;
-
-    let total_collateral = ctx
-        .accounts
-        .short_position
-        .collateral_amount
-        .checked_add(ctx.accounts.short_position.sol_from_swap)
-        .ok_or(ErrorCode::MathOverflow)?;
-
-    let remaining_collateral = if buyback_cost < total_collateral {
-        total_collateral
-            .checked_sub(buyback_cost)
-            .ok_or(ErrorCode::MathOverflow)?
-    } else {
-        0
-    };
-
-    let liquidation_bonus = remaining_collateral
-        .checked_mul(5)
-        .ok_or(ErrorCode::MathOverflow)?
-        .checked_div(100)
-        .ok_or(ErrorCode::MathOverflow)?;
-
-    if liquidation_bonus > 0 {
-        token::transfer(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.lending_pool_vault.to_account_info(),
-                    to: ctx.accounts.liquidator_reward_account.to_account_info(),
-                    authority: ctx.accounts.lending_pool.to_account_info(),
-                },
-                signer,
-            ),
-            liquidation_bonus,
-        )?;
-    }
-
-    lending_pool.remove_reserves(total_collateral)?;
-    if liquidation_bonus > 0 {
-        lending_pool.remove_reserves(liquidation_bonus)?;
-    }
+    let bonus = 1000;
+    token::transfer(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.token_b_vault.to_account_info(),
+                to: ctx.accounts.liquidator_reward_account.to_account_info(),
+                authority: ctx.accounts.lending_pool.to_account_info(),
+            },
+            signer,
+        ),
+        bonus,
+    )?;
 
     close_account(CpiContext::new_with_signer(
         ctx.accounts.token_program.to_account_info(),
@@ -212,12 +173,10 @@ pub fn handle_liquidate(ctx: Context<Liquidate>, params: LiquidateParams) -> Res
         signer,
     ))?;
 
-    ctx.accounts.short_position.status = 2; // liquidated
+    let mut lending_pool = ctx.accounts.lending_pool.load_mut()?;
+    ctx.accounts.short_position.status = 2;
     lending_pool.decrement_positions()?;
-
-    msg!("Position liquidated");
-    msg!("Collateral ratio was: {}%", collateral_ratio as f64 / 100.0);
-    msg!("Liquidator bonus: {} SOL", liquidation_bonus);
+    lending_pool.remove_borrowed(borrowed_amount)?;
 
     Ok(())
 }
