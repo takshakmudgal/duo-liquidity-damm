@@ -13,6 +13,7 @@ import { CpAmm } from "../target/types/cp_amm";
 import { createAssociatedTokenAccount } from "@solana/spl-token";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { mintTo } from "@solana/spl-token";
+import { derivePoolAuthority } from "./bankrun-utils";
 
 describe("lending_pool", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
@@ -35,6 +36,7 @@ describe("lending_pool", () => {
   let tokenAVault: any;
   let tokenBVault: any;
   let position: any;
+  let poolAuthority: any = derivePoolAuthority();
 
   const raw = [
     {
@@ -202,7 +204,27 @@ describe("lending_pool", () => {
     await new Promise((resolve) =>
       setTimeout(async () => {
         const res = await connection.getParsedTransaction(tx, "confirmed");
-        console.log(res);
+        // poolAuthority =
+        //   res?.meta?.innerInstructions
+        //     ?.flatMap((ix) => ix.instructions)
+        //     ?.map((ix) => ix.parsed?.info)
+        //     ?.find(
+        //       (info) =>
+        //         info?.authority ||
+        //         info?.mintAuthority ||
+        //         info?.newAuthority ||
+        //         info?.updateAuthority
+        //     )?.authority ||
+        //   res?.meta?.innerInstructions
+        //     ?.flatMap((ix) => ix.instructions)
+        //     ?.map((ix) => ix.parsed?.info)
+        //     ?.find(
+        //       (info) =>
+        //         info?.mintAuthority ||
+        //         info?.newAuthority ||
+        //         info?.updateAuthority
+        //     )?.mintAuthority ||
+        //   null;
         resolve(null);
       }, 1000)
     );
@@ -217,30 +239,29 @@ describe("lending_pool", () => {
     await new Promise((resolve) =>
       setTimeout(async () => {
         const res = await connection.getParsedTransaction(tx, "confirmed");
-        console.log(res);
         lendingPoolPda =
           res?.meta?.innerInstructions?.[0]?.instructions?.[0]?.parsed?.info
-            ?.newAccount;
-        tokenBVault =
-          res?.meta?.innerInstructions?.[0]?.instructions?.[1]?.parsed?.info
             ?.newAccount;
         resolve(null);
       }, 1000)
     );
   });
 
-  // it("Open Short", async () => {
-  //   const tx = await program.methods
-  //     .openShort(openShortParams[0])
-  //     .accounts({
-  //       lendingPool: lendingPoolPda,
-  //       user,
-  //       ammPool,
-  //       poolAuthority: payer,
-  //       tokenAMint,
-  //       tokenBMint,
-  //       ammTokenBVault: tokenBVault,
-  //     })
-  //     .rpc();
-  // });
+  it("Open Short", async () => {
+    const tx = await program.methods
+      .openShort(openShortParams[0])
+      .accounts({
+        lendingPool: lendingPoolPda,
+        user: payer.publicKey,
+        ammPool,
+        tokenAMint,
+        tokenBMint,
+        ammTokenAVault: tokenAVault,
+        ammTokenBVault: tokenBVault,
+        userTokenBAccount: payerTokenB,
+        poolAuthority: poolAuthority,
+      })
+      .signers([payer])
+      .rpc();
+  });
 });

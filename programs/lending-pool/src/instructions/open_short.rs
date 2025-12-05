@@ -24,7 +24,6 @@ pub struct OpenShort<'info> {
             b"short_position",
             lending_pool.key().as_ref(),
             user.key().as_ref(),
-            &lending_pool.load()?.active_positions.to_le_bytes()
         ],
         bump
     )]
@@ -122,7 +121,7 @@ pub fn handle_open_short(ctx: Context<OpenShort>, params: OpenShortParams) -> Re
             Transfer {
                 from: ctx.accounts.amm_token_a_vault.to_account_info(),
                 to: ctx.accounts.temp_token_a_account.to_account_info(),
-                authority: ctx.accounts.pool_authority.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
             },
             signer,
         ),
