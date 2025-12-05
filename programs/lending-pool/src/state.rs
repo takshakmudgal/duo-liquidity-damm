@@ -7,6 +7,7 @@ pub struct LendingPool {
     pub amm_pool: Pubkey,
     pub token_a_mint: Pubkey,
     pub token_b_mint: Pubkey,
+    pub token_a_vault: Pubkey,
     pub token_b_vault: Pubkey,
     pub total_reserves: u64,
     pub total_borrowed: u64,
@@ -36,11 +37,21 @@ pub struct ShortPosition {
     pub _padding: [u8; 6],
 }
 
-#[account]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct OpenShortParams {
     pub collateral_amount: u64,
     pub borrow_amount: u64,
     pub minimum_sol_out: u64,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct CloseShortParams {
+    pub max_sol_in: u64,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct LiquidateParams {
+    pub max_sol_in: u64,
 }
 
 impl LendingPool {
@@ -52,6 +63,7 @@ impl LendingPool {
         amm_pool: Pubkey,
         token_a_mint: Pubkey,
         token_b_mint: Pubkey,
+        token_a_vault: Pubkey,
         token_b_vault: Pubkey,
         min_collateral_ratio: u16,
         liquidation_threshold: u16,
@@ -62,6 +74,7 @@ impl LendingPool {
         self.amm_pool = amm_pool;
         self.token_a_mint = token_a_mint;
         self.token_b_mint = token_b_mint;
+        self.token_a_vault = token_a_vault;
         self.token_b_vault = token_b_vault;
         self.min_collateral_ratio = min_collateral_ratio;
         self.liquidation_threshold = liquidation_threshold;
@@ -143,7 +156,7 @@ impl ShortPosition {
         self.entry_sqrt_price = entry_sqrt_price;
         self.opened_at = Clock::get()?.unix_timestamp;
         self.bump = bump;
-        self.status = 0; // active
+        self.status = 0;
         Ok(())
     }
 
